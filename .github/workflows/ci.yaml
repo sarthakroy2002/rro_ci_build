@@ -2,12 +2,54 @@ name: Build CertifiedPropsOverlay
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0,6 * * *'
+
+env:
+  GH_USERNAME: sarthakroy2002
 
 permissions:
   contents: write
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_push: ${{ steps.compare.outputs.should_push }}
+      latest_ver: ${{ steps.latest.outputs.latest_ver }}
+      current_ver: ${{ steps.latest.outputs.current_ver }}
+
+    steps:
+      - name: Fetch latest and current version
+        id: latest
+        run: |
+          set -euo pipefail
+
+          latestver=$(curl -fsSL https://github.com/yaap/vendor_yaap/raw/sixteen/overlay/CertifiedPropsOverlay/AndroidManifest.xml | grep -oP 'versionName="\K[^"]+')
+          currentver=$(curl -fsSL https://github.com/yaap/ota-info/raw/full-signed/cancunf/cert.json | jq -r '.version')
+
+          echo "latest_ver=${latestver}" >> "$GITHUB_OUTPUT"
+          echo "current_ver=${currentver}" >> "$GITHUB_OUTPUT"
+
+      - name: Compare against current version
+        id: compare
+        env:
+          LATEST_VER: ${{ steps.latest.outputs.latest_ver }}
+          CURRENT_VER: ${{ steps.latest.outputs.current_ver }}
+        run: |
+          set -euo pipefail
+
+          if [ "$CURRENT_VER" != "$LATEST_VER" ]; then
+            echo "Detected upstream CertifiedPropsOverlay changes"
+            echo "should_push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Current CertifiedPropsOverlay version already match upstream version"
+            echo "should_push=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check-version
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.check-version.outputs.should_push == 'true' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -113,3 +155,57 @@ jobs:
             vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-vanilla.apk
         env:
           GITHUB_TOKEN: ${{ secrets.CERTS_TOKEN }}
+
+  push:
+    needs: [check-version, build]
+    if: ${{ needs.check-version.outputs.should_push == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CertifiedPropsOverlay
+          path: artifacts
+
+      - name: Push APKs to ota-info repo
+        env:
+          LATEST_VER: ${{ needs.check-version.outputs.latest_ver }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.name "Sarthak Roy"
+          git config --global user.email "sarthakroy2002@gmail.com"
+
+          git clone "https://${GH_USERNAME}:${{ secrets.CERTS_TOKEN }}@github.com/yaap/ota-info.git"
+
+          cp artifacts/CertifiedPropsOverlay-gms.apk ota-info/cancunf/cert.apk
+          cp artifacts/CertifiedPropsOverlay-vanilla.apk ota-info/sunny/cert.apk
+
+          sed -i -E "s/(\"version\": )[0-9.]+/\1$LATEST_VER/" ota-info/cancunf/cert.json
+          sed -i -E "s/(\"version\": )[0-9.]+/\1$LATEST_VER/" ota-info/sunny/cert.json
+
+          cd ota-info
+
+          git add cancunf
+          git commit -m "cancunf: Update certified fingerprint"
+          git push origin HEAD
+
+          git add sunny
+          git commit -m "sunny: Update certified fingerprint"
+          git push origin HEAD
+
+          git checkout vanilla-signed
+
+          cp ../artifacts/CertifiedPropsOverlay-vanilla.apk cancunf/cert.apk
+          cp ../artifacts/CertifiedPropsOverlay-vanilla.apk sunny/cert.apk
+
+          sed -i -E "s/(\"version\": )[0-9.]+/\1$LATEST_VER/" cancunf/cert.json
+          sed -i -E "s/(\"version\": )[0-9.]+/\1$LATEST_VER/" sunny/cert.json
+
+          git add cancunf
+          git commit -m "cancunf: Update certified fingerprint"
+          git push origin HEAD
+
+          git add sunny
+          git commit -m "sunny: Update certified fingerprint"
+          git push origin HEAD
