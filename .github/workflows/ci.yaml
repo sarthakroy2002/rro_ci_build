@@ -31,10 +31,17 @@ jobs:
           git clone --depth=1 \
             https://github.com/yaap/vendor_yaap.git
 
-      - name: Clone private cert repo
+      - name: Setup certs
+        env:
+          GMS_CERT_PRIV: ${{ secrets.GMS_CERT_PRIV }}
+          GMS_CERT_PUB: ${{ secrets.GMS_CERT_PUB }}
+          VANILLA_CERT_PRIV: ${{ secrets.VANILLA_CERT_PRIV }}
+          VANILLA_CERT_PUB: ${{ secrets.VANILLA_CERT_PUB }}
         run: |
-          git clone --depth=1 \
-            https://${{ secrets.CERTS_TOKEN }}@github.com/sarthakroy2002/platform_android-certs.git certs
+          printf '%s' "$GMS_CERT_PRIV" | base64 -d > releasekey_gms.pk8
+          printf '%s\n' "$GMS_CERT_PUB" > releasekey_gms.x509.pem
+          printf '%s' "$VANILLA_CERT_PRIV" | base64 -d > releasekey_vanilla.pk8
+          printf '%s\n' "$VANILLA_CERT_PUB" > releasekey_vanilla.x509.pem
 
       - name: Build overlay APK
         run: |
@@ -61,24 +68,35 @@ jobs:
             vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-unsigned.apk \
             vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-aligned.apk
 
-      - name: Sign APK
+      - name: Sign APKs
         run: |
           $ANDROID_HOME/build-tools/35.0.0/apksigner sign \
-            --key certs/releasekey.pk8 \
-            --cert certs/releasekey.x509.pem \
-            --out vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay.apk \
+            --key releasekey_gms.pk8 \
+            --cert releasekey_gms.x509.pem \
+            --out vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-gms.apk \
+            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-aligned.apk
+
+          $ANDROID_HOME/build-tools/35.0.0/apksigner sign \
+            --key releasekey_vanilla.pk8 \
+            --cert releasekey_vanilla.x509.pem \
+            --out vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-vanilla.apk \
             vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-aligned.apk
 
       - name: Verify APK
         run: |
           $ANDROID_HOME/build-tools/35.0.0/apksigner verify -v \
-            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay.apk
+            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-gms.apk
+
+          $ANDROID_HOME/build-tools/35.0.0/apksigner verify -v \
+            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-vanilla.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CertifiedPropsOverlay
-          path: vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay.apk
+          path: |
+            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-gms.apk
+            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-vanilla.apk
 
       - name: Generate release tag
         id: tag
@@ -91,6 +109,7 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: CertifiedPropsOverlay ${{ steps.tag.outputs.tag }}
           files: |
-            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay.apk
+            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-gms.apk
+            vendor_yaap/overlay/CertifiedPropsOverlay/out/CertifiedPropsOverlay-vanilla.apk
         env:
           GITHUB_TOKEN: ${{ secrets.CERTS_TOKEN }}
